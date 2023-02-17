@@ -67,6 +67,9 @@ CRITERIA_CLF = {
     "gini": _criterion.Gini,
     "log_loss": _criterion.Entropy,
     "entropy": _criterion.Entropy,
+    "ordinal_entropy": _criterion.EntropyOrdinal,
+    # "combined": _criterion.EntropyOrdinalCombination,
+    "nominal_entropy": _criterion.EntropyNominal,
 }
 CRITERIA_REG = {
     "squared_error": _criterion.MSE,
@@ -821,7 +824,7 @@ class DecisionTreeClassifier(ClassifierMixin, BaseDecisionTree):
 
     _parameter_constraints: dict = {
         **BaseDecisionTree._parameter_constraints,
-        "criterion": [StrOptions({"gini", "entropy", "log_loss"}), Hidden(Criterion)],
+        "criterion": [StrOptions({"gini", "entropy", "log_loss", "ordinal_entropy", "nominal_entropy"}), Hidden(Criterion)],
         "class_weight": [dict, list, StrOptions({"balanced"}), None],
     }
 

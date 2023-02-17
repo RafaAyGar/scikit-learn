@@ -15,13 +15,15 @@
 from libc.string cimport memcpy
 from libc.string cimport memset
 from libc.math cimport fabs
+from libc.math cimport abs
 
 import numpy as np
-cimport numpy as cnp
-cnp.import_array()
+cimport numpy as np
+np.import_array()
 
 from numpy.math cimport INFINITY
 from scipy.special.cython_special cimport xlogy
+from libc.math cimport log as ln
 
 from ._utils cimport log
 from ._utils cimport WeightedMedianCalculator
@@ -204,7 +206,7 @@ cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""
 
     def __cinit__(self, SIZE_t n_outputs,
-                  cnp.ndarray[SIZE_t, ndim=1] n_classes):
+                  np.ndarray[SIZE_t, ndim=1] n_classes):
         """Initialize attributes for this criterion.
 
         Parameters
@@ -440,6 +442,37 @@ cdef class ClassificationCriterion(Criterion):
             memcpy(dest, &self.sum_total[k, 0], self.n_classes[k] * sizeof(double))
             dest += self.max_n_classes
 
+# cdef SIZE_t get_max_surprise_index(double[:, ::1] array, SIZE_t[::1] n_classes, SIZE_t k) nogil:
+#         cdef SIZE_t c
+#         cdef SIZE_t c_max = 0
+#         cdef double max_n_classes = 0
+
+#         for c in range(n_classes):
+#             if array[k, c] > max_n_classes:
+#                 c_max = c
+#                 max_n_classes = array[k, c]
+#         return c_max
+
+# cdef double get_impurity_from(self, double[:, ::1] array, double weight) nogil:
+#     cdef double diff = 0.0
+#     cdef SIZE_t c
+#     cdef SIZE_t c_max = 0
+#     cdef SIZE_t plus = 0
+
+#     for k in range(self.n_outputs):
+#         c_max = get_max_surprise_index(array, n_classes, k)
+#         for c in range(self.n_classes[k]):
+            
+#             if c == c_max:
+#                 continue
+#             elif c < c_max:
+#                 plus = 1
+#             else:
+#                 plus = -1
+
+#             diff += ( array[k, c + plus] ) - array[k, c]
+
+#     return (diff / weight)
 
 cdef class Entropy(ClassificationCriterion):
     r"""Cross Entropy impurity criterion.
@@ -509,6 +542,137 @@ cdef class Entropy(ClassificationCriterion):
                 if count_k > 0.0:
                     count_k /= self.weighted_n_right
                     entropy_right -= count_k * log(count_k)
+
+        impurity_left[0] = entropy_left / self.n_outputs
+        impurity_right[0] = entropy_right / self.n_outputs
+
+cdef class EntropyNominal(ClassificationCriterion):
+    r"""
+        Nominal entropy ( for testing purposes )
+    """
+
+    cdef SIZE_t get_max_surprise_index(self, double[:, ::1] array, SIZE_t k) nogil:
+        cdef SIZE_t c
+        cdef SIZE_t c_max = 0
+        cdef double max_n_classes = 0
+
+        for c in range(self.n_classes[k]):
+            if array[k, c] > max_n_classes:
+                c_max = c
+                max_n_classes = array[k, c]
+        return c_max
+
+    cdef double get_impurity_from(self, double[:, ::1] array, double weight) nogil:
+        cdef double diff = 0.0
+        cdef SIZE_t c
+        cdef SIZE_t c_max = 0
+
+        for k in range(self.n_outputs):
+            c_max = self.get_max_surprise_index(array, k)
+            for c in range(self.n_classes[k]):
+                
+                if c == c_max:
+                    continue
+
+                diff += array[k, c]
+
+        return (diff / weight)
+
+    cdef double node_impurity(self) nogil:
+        """Evaluate the impurity of the current node.
+
+        Evaluate the cross-entropy criterion as impurity of the current node,
+        i.e. the impurity of sample_indices[start:end]. The smaller the impurity the
+        better.
+        """
+        return self.get_impurity_from(self.sum_total, self.weighted_n_node_samples) / self.n_outputs
+
+    cdef void children_impurity(self, double* impurity_left,
+                                double* impurity_right) nogil:
+        """Evaluate the impurity in children nodes.
+
+        i.e. the impurity of the left child (sample_indices[start:pos]) and the
+        impurity the right child (sample_indices[pos:end]).
+
+        Parameters
+        ----------
+        impurity_left : double pointer
+            The memory address to save the impurity of the left node
+        impurity_right : double pointer
+            The memory address to save the impurity of the right node
+        """
+        cdef double entropy_left = 0.0
+        cdef double entropy_right = 0.0
+
+        entropy_left = self.get_impurity_from(self.sum_left, self.weighted_n_left)
+
+        entropy_right = self.get_impurity_from(self.sum_right, self.weighted_n_right)
+
+        impurity_left[0] = entropy_left / self.n_outputs
+        impurity_right[0] = entropy_right / self.n_outputs
+
+cdef class EntropyOrdinal(ClassificationCriterion):
+    r"""
+        My Ordinal Entropy
+    """
+
+    cdef SIZE_t get_max_surprise_index(self, double[:, ::1] array, SIZE_t k) nogil:
+        cdef SIZE_t c
+        cdef SIZE_t c_max = 0
+        cdef double max_n_classes = 0
+
+        for c in range(self.n_classes[k]):
+            if array[k, c] > max_n_classes:
+                c_max = c
+                max_n_classes = array[k, c]
+        return c_max
+
+    cdef double get_impurity_from(self, double[:, ::1] array, double weight) nogil:
+        cdef double count_k = 0.0
+        cdef double diff = 0.0
+        cdef SIZE_t c
+        cdef SIZE_t c_max = 0
+
+        for k in range(self.n_outputs):
+            c_max = self.get_max_surprise_index(array, k)
+            for c in range(self.n_classes[k]):
+
+                count_k = array[k, c]
+                if count_k > 0.0:
+                    count_k = count_k * fabs(c - c_max)
+                    diff += count_k
+
+        return diff / weight
+
+    cdef double node_impurity(self) nogil:
+        """Evaluate the impurity of the current node.
+
+        Evaluate the cross-entropy criterion as impurity of the current node,
+        i.e. the impurity of sample_indices[start:end]. The smaller the impurity the
+        better.
+        """
+        return self.get_impurity_from(self.sum_total, self.weighted_n_node_samples) / self.n_outputs
+
+    cdef void children_impurity(self, double* impurity_left,
+                                double* impurity_right) nogil:
+        """Evaluate the impurity in children nodes.
+
+        i.e. the impurity of the left child (sample_indices[start:pos]) and the
+        impurity the right child (sample_indices[pos:end]).
+
+        Parameters
+        ----------
+        impurity_left : double pointer
+            The memory address to save the impurity of the left node
+        impurity_right : double pointer
+            The memory address to save the impurity of the right node
+        """
+        cdef double entropy_left = 0.0
+        cdef double entropy_right = 0.0
+
+        entropy_left = self.get_impurity_from(self.sum_left, self.weighted_n_left)
+
+        entropy_right = self.get_impurity_from(self.sum_right, self.weighted_n_right)
 
         impurity_left[0] = entropy_left / self.n_outputs
         impurity_right[0] = entropy_right / self.n_outputs
@@ -887,8 +1051,8 @@ cdef class MAE(RegressionCriterion):
        MAE = (1 / n)*(\sum_i |y_i - f_i|), where y_i is the true
        value and f_i is the predicted value."""
 
-    cdef cnp.ndarray left_child
-    cdef cnp.ndarray right_child
+    cdef np.ndarray left_child
+    cdef np.ndarray right_child
     cdef DOUBLE_t[::1] node_medians
 
     def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples):
