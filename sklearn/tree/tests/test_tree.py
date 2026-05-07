@@ -2507,7 +2507,7 @@ def test_missing_values_random_splitter_on_equal_nodes_no_missing(criterion, see
         assert_allclose(y_pred_right, y_pred)
 
 
-@pytest.mark.parametrize("criterion", ["entropy", "gini"])
+@pytest.mark.parametrize("criterion", ["entropy", "gini", "ogini"])
 def test_missing_values_best_splitter_three_classes(criterion):
     """Test when missing values are uniquely present in a class among 3 classes."""
     missing_values_class = 0
@@ -2522,7 +2522,7 @@ def test_missing_values_best_splitter_three_classes(criterion):
     assert_array_equal(y_nan_pred, [missing_values_class, 1, 2])
 
 
-@pytest.mark.parametrize("criterion", ["entropy", "gini"])
+@pytest.mark.parametrize("criterion", ["entropy", "gini", "ogini"])
 def test_missing_values_best_splitter_to_left(criterion):
     """Missing values spanning only one class at fit-time must make missing
     values at predict-time be classified has belonging to this class."""
@@ -2538,7 +2538,7 @@ def test_missing_values_best_splitter_to_left(criterion):
     assert_array_equal(y_pred, [0, 1, 0])
 
 
-@pytest.mark.parametrize("criterion", ["entropy", "gini"])
+@pytest.mark.parametrize("criterion", ["entropy", "gini", "ogini"])
 def test_missing_values_best_splitter_to_right(criterion):
     """Missing values and non-missing values sharing one class at fit-time
     must make missing values at predict-time be classified has belonging
@@ -2555,7 +2555,7 @@ def test_missing_values_best_splitter_to_right(criterion):
     assert_array_equal(y_pred, [1, 0, 1])
 
 
-@pytest.mark.parametrize("criterion", ["entropy", "gini"])
+@pytest.mark.parametrize("criterion", ["entropy", "gini", "ogini"])
 def test_missing_values_best_splitter_missing_both_classes_has_nan(criterion):
     """Check behavior of missing value when there is one missing value in each class."""
     X = np.array([[1, 2, 3, 5, np.nan, 10, 20, 30, 60, np.nan]]).T

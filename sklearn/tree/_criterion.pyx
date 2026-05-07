@@ -686,6 +686,47 @@ cdef class Gini(ClassificationCriterion):
         impurity_left[0] = gini_left / self.n_outputs
         impurity_right[0] = gini_right / self.n_outputs
 
+cdef class OrdinalGini(ClassificationCriterion):
+    cdef float64_t node_impurity(self) noexcept nogil:
+        cdef float64_t ogini = 0.0
+        cdef float64_t cumprob_c
+        cdef intp_t k
+        cdef intp_t c
+        cdef intp_t q
+
+        for k in range(self.n_outputs):
+            for c in range(self.n_classes[k]):
+                cumprob_c = 0.0
+                for q in range(0, c + 1):
+                    cumprob_c += self.sum_total[k, q] / self.weighted_n_node_samples
+                ogini += cumprob_c * (1 - cumprob_c)
+
+        return ogini / self.n_outputs
+
+    cdef void children_impurity(self, float64_t* impurity_left,
+                                float64_t* impurity_right) noexcept nogil:
+        cdef float64_t ogini_left = 0.0
+        cdef float64_t ogini_right = 0.0
+        cdef float64_t cumprob_c
+        cdef intp_t k
+        cdef intp_t c
+        cdef intp_t q
+
+        for k in range(self.n_outputs):
+            for c in range(self.n_classes[k]):
+                cumprob_c = 0.0
+                for q in range(0, c + 1):
+                    cumprob_c += self.sum_left[k, q] / self.weighted_n_left
+                ogini_left += cumprob_c * (1 - cumprob_c)
+
+                cumprob_c = 0.0
+                for q in range(0, c + 1):
+                    cumprob_c += self.sum_right[k, q] / self.weighted_n_right
+                ogini_right += cumprob_c * (1 - cumprob_c)
+
+        impurity_left[0] = ogini_left / self.n_outputs
+        impurity_right[0] = ogini_right / self.n_outputs
+
 
 cdef inline void _move_sums_regression(
     RegressionCriterion criterion,
