@@ -8,7 +8,6 @@ randomized trees. Single and multi-output problems are both handled.
 
 import copy
 import numbers
-import warnings
 from abc import ABCMeta, abstractmethod
 from math import ceil
 from numbers import Integral, Real
@@ -16,7 +15,9 @@ from numbers import Integral, Real
 import numpy as np
 from scipy.sparse import issparse
 
-from sklearn.base import (
+from sklearn.utils import metadata_routing
+
+from ..base import (
     BaseEstimator,
     ClassifierMixin,
     MultiOutputMixin,
@@ -25,25 +26,10 @@ from sklearn.base import (
     clone,
     is_classifier,
 )
-from sklearn.tree import _criterion, _splitter, _tree
-from sklearn.tree._criterion import Criterion
-from sklearn.tree._splitter import Splitter
-from sklearn.tree._tree import (
-    BestFirstTreeBuilder,
-    DepthFirstTreeBuilder,
-    Tree,
-    _build_pruned_tree_ccp,
-    ccp_pruning_path,
-)
-from sklearn.utils import (
-    Bunch,
-    check_random_state,
-    compute_sample_weight,
-    metadata_routing,
-)
-from sklearn.utils._param_validation import Hidden, Interval, RealNotInt, StrOptions
-from sklearn.utils.multiclass import check_classification_targets
-from sklearn.utils.validation import (
+from ..utils import Bunch, check_random_state, compute_sample_weight
+from ..utils._param_validation import Hidden, Interval, RealNotInt, StrOptions
+from ..utils.multiclass import check_classification_targets
+from ..utils.validation import (
     _assert_all_finite_element_wise,
     _check_n_features,
     _check_sample_weight,
@@ -51,6 +37,17 @@ from sklearn.utils.validation import (
     check_is_fitted,
     validate_data,
 )
+from . import _criterion, _splitter, _tree
+from ._criterion import Criterion
+from ._splitter import Splitter
+from ._tree import (
+    BestFirstTreeBuilder,
+    DepthFirstTreeBuilder,
+    Tree,
+    _build_pruned_tree_ccp,
+    ccp_pruning_path,
+)
+from ._utils import _any_isnan_axis0
 
 __all__ = [
     "DecisionTreeClassifier",
@@ -69,14 +66,14 @@ DOUBLE = _tree.DOUBLE
 
 CRITERIA_CLF = {
     "gini": _criterion.Gini,
+    "ogini": _criterion.OrdinalGini,
+    "ranking_impurity": _criterion.RankingImpurity,
     "log_loss": _criterion.Entropy,
     "entropy": _criterion.Entropy,
-    "ordinal_entropy": _criterion.EntropyOrdinal,
-    # "combined": _criterion.EntropyOrdinalCombination,
-    "nominal_entropy": _criterion.EntropyNominal,
 }
 CRITERIA_REG = {
     "squared_error": _criterion.MSE,
+    "friedman_mse": _criterion.FriedmanMSE,
     "absolute_error": _criterion.MAE,
     "poisson": _criterion.Poisson,
 }
@@ -187,11 +184,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         return self.tree_.n_leaves
 
     def _support_missing_values(self, X):
-        return (
-            not issparse(X)
-            and self.__sklearn_tags__().input_tags.allow_nan
-            and self.monotonic_cst is None
-        )
+        return not issparse(X) and self.__sklearn_tags__().input_tags.allow_nan and self.monotonic_cst is None
 
     def _compute_missing_values_in_feature_mask(self, X, estimator_name=None):
         """Return boolean mask denoting if there are missing values for each feature.
@@ -230,7 +223,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         if not np.isnan(overall_sum):
             return None
 
-        missing_values_in_feature_mask = np.isnan(X.sum(axis=0))
+        missing_values_in_feature_mask = _any_isnan_axis0(X)
         return missing_values_in_feature_mask
 
     def _fit(
@@ -250,36 +243,24 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
 
             # _compute_missing_values_in_feature_mask will check for finite values and
             # compute the missing mask if the tree supports missing values
-            check_X_params = dict(
-                dtype=DTYPE, accept_sparse="csc", ensure_all_finite=False
-            )
+            check_X_params = dict(dtype=DTYPE, accept_sparse="csc", ensure_all_finite=False)
             check_y_params = dict(ensure_2d=False, dtype=None)
-            X, y = validate_data(
-                self, X, y, validate_separately=(check_X_params, check_y_params)
-            )
+            X, y = validate_data(self, X, y, validate_separately=(check_X_params, check_y_params))
 
-            missing_values_in_feature_mask = (
-                self._compute_missing_values_in_feature_mask(X)
-            )
+            missing_values_in_feature_mask = self._compute_missing_values_in_feature_mask(X)
             if issparse(X):
                 X.sort_indices()
 
                 if X.indices.dtype != np.intc or X.indptr.dtype != np.intc:
-                    raise ValueError(
-                        "No support for np.int64 index based sparse matrices"
-                    )
+                    raise ValueError("No support for np.int64 index based sparse matrices")
 
             if self.criterion == "poisson":
                 if np.any(y < 0):
                     raise ValueError(
-                        "Some value(s) of y are negative which is"
-                        " not allowed for Poisson regression."
+                        "Some value(s) of y are negative which is" " not allowed for Poisson regression."
                     )
                 if np.sum(y) <= 0:
-                    raise ValueError(
-                        "Sum of y is not positive which is "
-                        "necessary for Poisson regression."
-                    )
+                    raise ValueError("Sum of y is not positive which is " "necessary for Poisson regression.")
 
         # Determine output settings
         n_samples, self.n_features_in_ = X.shape
@@ -313,9 +294,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
             y = y_encoded
 
             if self.class_weight is not None:
-                expanded_class_weight = compute_sample_weight(
-                    self.class_weight, y_original
-                )
+                expanded_class_weight = compute_sample_weight(self.class_weight, y_original)
 
             self.n_classes_ = np.array(self.n_classes_, dtype=np.intp)
 
@@ -357,10 +336,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         max_leaf_nodes = -1 if self.max_leaf_nodes is None else self.max_leaf_nodes
 
         if len(y) != n_samples:
-            raise ValueError(
-                "Number of labels=%d does not match number of samples=%d"
-                % (len(y), n_samples)
-            )
+            raise ValueError("Number of labels=%d does not match number of samples=%d" % (len(y), n_samples))
 
         if sample_weight is not None:
             sample_weight = _check_sample_weight(sample_weight, X, dtype=DOUBLE)
@@ -381,9 +357,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         criterion = self.criterion
         if not isinstance(criterion, Criterion):
             if is_classification:
-                criterion = CRITERIA_CLF[self.criterion](
-                    self.n_outputs_, self.n_classes_
-                )
+                criterion = CRITERIA_CLF[self.criterion](self.n_outputs_, self.n_classes_)
             else:
                 criterion = CRITERIA_REG[self.criterion](self.n_outputs_, n_samples)
         else:
@@ -398,9 +372,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
             monotonic_cst = None
         else:
             if self.n_outputs_ > 1:
-                raise ValueError(
-                    "Monotonicity constraints are not supported with multiple outputs."
-                )
+                raise ValueError("Monotonicity constraints are not supported with multiple outputs.")
             # Check to correct monotonicity constraint' specification,
             # by applying element-wise logical conjunction
             # Note: we do not cast `np.asarray(self.monotonic_cst, dtype=np.int8)`
@@ -414,17 +386,16 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
                 )
             valid_constraints = np.isin(monotonic_cst, (-1, 0, 1))
             if not np.all(valid_constraints):
-                unique_constraints_value = np.unique(monotonic_cst)
+                unique_constaints_value = np.unique(monotonic_cst)
                 raise ValueError(
                     "monotonic_cst must be None or an array-like of -1, 0 or 1, but"
-                    f" got {unique_constraints_value}"
+                    f" got {unique_constaints_value}"
                 )
             monotonic_cst = np.asarray(monotonic_cst, dtype=np.int8)
             if is_classifier(self):
                 if self.n_classes_[0] > 2:
                     raise ValueError(
-                        "Monotonicity constraints are not supported with multiclass "
-                        "classification"
+                        "Monotonicity constraints are not supported with multiclass " "classification"
                     )
                 # Binary classification trees are built by constraining probabilities
                 # of the *negative class* in order to make the implementation similar
@@ -499,9 +470,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
                 reset=False,
                 ensure_all_finite=ensure_all_finite,
             )
-            if issparse(X) and (
-                X.indices.dtype != np.intc or X.indptr.dtype != np.intc
-            ):
+            if issparse(X) and (X.indices.dtype != np.intc or X.indptr.dtype != np.intc):
                 raise ValueError("No support for np.int64 index based sparse matrices")
         else:
             # The number of features is checked regardless of `check_input`
@@ -545,9 +514,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
                 class_type = self.classes_[0].dtype
                 predictions = np.zeros((n_samples, self.n_outputs_), dtype=class_type)
                 for k in range(self.n_outputs_):
-                    predictions[:, k] = self.classes_[k].take(
-                        np.argmax(proba[:, k], axis=1), axis=0
-                    )
+                    predictions[:, k] = self.classes_[k].take(np.argmax(proba[:, k], axis=1), axis=0)
 
                 return predictions
 
@@ -947,8 +914,8 @@ class DecisionTreeClassifier(ClassifierMixin, BaseDecisionTree):
     >>> cross_val_score(clf, iris.data, iris.target, cv=10)
     ...                             # doctest: +SKIP
     ...
-    array([ 1.     ,  0.93,  0.86,  0.93,  0.93,
-            0.93,  0.93,  1.     ,  0.93,  1.      ])
+    array([ 1.     ,  0.93...,  0.86...,  0.93...,  0.93...,
+            0.93...,  0.93...,  1.     ,  0.93...,  1.      ])
     """
 
     # "check_input" is used for optimisation and isn't something to be passed
@@ -958,7 +925,7 @@ class DecisionTreeClassifier(ClassifierMixin, BaseDecisionTree):
 
     _parameter_constraints: dict = {
         **BaseDecisionTree._parameter_constraints,
-        "criterion": [StrOptions({"gini", "entropy", "log_loss", "ordinal_entropy", "nominal_entropy"}), Hidden(Criterion)],
+        "criterion": [StrOptions({"gini", "ogini", "ranking_impurity", "entropy", "log_loss"}), Hidden(Criterion)],
         "class_weight": [dict, list, StrOptions({"balanced"}), None],
     }
 
@@ -1101,10 +1068,17 @@ class DecisionTreeClassifier(ClassifierMixin, BaseDecisionTree):
 
     def __sklearn_tags__(self):
         tags = super().__sklearn_tags__()
-        # XXX: nan values are only accepted in dense arrays, but we set this for
-        # common test to pass, specifically: check_estimators_nan_inf
-        tags.input_tags.allow_nan = True
+        # XXX: nan is only support for dense arrays, but we set this for common test to
+        # pass, specifically: check_estimators_nan_inf
+        allow_nan = self.splitter in ("best", "random") and self.criterion in {
+            "gini",
+            "ogini",
+            "ranking_impurity",
+            "log_loss",
+            "entropy",
+        }
         tags.classifier_tags.multi_label = True
+        tags.input_tags.allow_nan = allow_nan
         return tags
 
 
@@ -1115,23 +1089,22 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
 
     Parameters
     ----------
-    criterion : {"squared_error", "absolute_error", "poisson"}, default="squared_error"
+    criterion : {"squared_error", "friedman_mse", "absolute_error", \
+            "poisson"}, default="squared_error"
         The function to measure the quality of a split. Supported criteria
         are "squared_error" for the mean squared error, which is equal to
         variance reduction as feature selection criterion and minimizes the L2
-        loss using the mean of each terminal node, "absolute_error" for the mean
-        absolute error, which minimizes the L1 loss using the median of each terminal
-        node, and "poisson" which uses reduction in Poisson deviance to find splits,
-        also using the mean of each terminal node.
+        loss using the mean of each terminal node, "friedman_mse", which uses
+        mean squared error with Friedman's improvement score for potential
+        splits, "absolute_error" for the mean absolute error, which minimizes
+        the L1 loss using the median of each terminal node, and "poisson" which
+        uses reduction in the half mean Poisson deviance to find splits.
 
         .. versionadded:: 0.18
            Mean Absolute Error (MAE) criterion.
 
         .. versionadded:: 0.24
             Poisson deviance criterion.
-
-        .. versionchanged:: 1.9
-            Criterion `"friedman_mse"` was deprecated.
 
     splitter : {"best", "random"}, default="best"
         The strategy used to choose the split at each node. Supported
@@ -1325,8 +1298,8 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
     >>> cross_val_score(regressor, X, y, cv=10)
     ...                    # doctest: +SKIP
     ...
-    array([-0.39, -0.46,  0.02,  0.06, -0.50,
-           0.16,  0.11, -0.73, -0.30, -0.00])
+    array([-0.39..., -0.46...,  0.02...,  0.06..., -0.50...,
+           0.16...,  0.11..., -0.73..., -0.30..., -0.00...])
     """
 
     # "check_input" is used for optimisation and isn't something to be passed
@@ -1336,7 +1309,7 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
     _parameter_constraints: dict = {
         **BaseDecisionTree._parameter_constraints,
         "criterion": [
-            StrOptions({"squared_error", "absolute_error", "poisson"}),
+            StrOptions({"squared_error", "friedman_mse", "absolute_error", "poisson"}),
             Hidden(Criterion),
         ],
     }
@@ -1357,16 +1330,6 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
         ccp_alpha=0.0,
         monotonic_cst=None,
     ):
-        if isinstance(criterion, str) and criterion == "friedman_mse":
-            # TODO(1.11): remove support of "friedman_mse" criterion.
-            criterion = "squared_error"
-            warnings.warn(
-                'Value `"friedman_mse"` for `criterion` is deprecated and will be '
-                'removed in 1.11. It maps to `"squared_error"` as both '
-                'were always equivalent. Use `criterion="squared_error"` '
-                "to remove this warning.",
-                FutureWarning,
-            )
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1438,21 +1401,22 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
             The value of the partial dependence function on each grid point.
         """
         grid = np.asarray(grid, dtype=DTYPE, order="C")
-        averaged_predictions = np.zeros(
-            shape=grid.shape[0], dtype=np.float64, order="C"
-        )
+        averaged_predictions = np.zeros(shape=grid.shape[0], dtype=np.float64, order="C")
         target_features = np.asarray(target_features, dtype=np.intp, order="C")
 
-        self.tree_.compute_partial_dependence(
-            grid, target_features, averaged_predictions
-        )
+        self.tree_.compute_partial_dependence(grid, target_features, averaged_predictions)
         return averaged_predictions
 
     def __sklearn_tags__(self):
         tags = super().__sklearn_tags__()
-        # XXX: nan values are only accepted in dense arrays, but we set this for
-        # for common test to pass, specifically: check_estimators_nan_inf
-        tags.input_tags.allow_nan = True
+        # XXX: nan is only support for dense arrays, but we set this for common test to
+        # pass, specifically: check_estimators_nan_inf
+        allow_nan = self.splitter in ("best", "random") and self.criterion in {
+            "squared_error",
+            "friedman_mse",
+            "poisson",
+        }
+        tags.input_tags.allow_nan = allow_nan
         return tags
 
 
@@ -1695,7 +1659,7 @@ class ExtraTreeClassifier(DecisionTreeClassifier):
     >>> cls = BaggingClassifier(extra_tree, random_state=0).fit(
     ...    X_train, y_train)
     >>> cls.score(X_test, y_test)
-    0.8947
+    0.8947...
     """
 
     def __init__(
@@ -1733,9 +1697,15 @@ class ExtraTreeClassifier(DecisionTreeClassifier):
 
     def __sklearn_tags__(self):
         tags = super().__sklearn_tags__()
-        # XXX: nan values are only accepted in dense arrays, but we set this for
+        # XXX: nan is only supported for dense arrays, but we set this for the
         # common test to pass, specifically: check_estimators_nan_inf
-        allow_nan = self.splitter == "random"
+        allow_nan = self.splitter == "random" and self.criterion in {
+            "gini",
+            "ogini",
+            "ranking_impurity",
+            "log_loss",
+            "entropy",
+        }
         tags.classifier_tags.multi_label = True
         tags.input_tags.allow_nan = allow_nan
         return tags
@@ -1757,23 +1727,22 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
 
     Parameters
     ----------
-    criterion : {"squared_error", "absolute_error", "poisson"}, default="squared_error"
+    criterion : {"squared_error", "friedman_mse", "absolute_error", "poisson"}, \
+            default="squared_error"
         The function to measure the quality of a split. Supported criteria
         are "squared_error" for the mean squared error, which is equal to
         variance reduction as feature selection criterion and minimizes the L2
-        loss using the mean of each terminal node, "absolute_error" for the mean
-        absolute error, which minimizes the L1 loss using the median of each terminal
-        node, and "poisson" which uses reduction in Poisson deviance to find splits,
-        also using the mean of each terminal node.
+        loss using the mean of each terminal node, "friedman_mse", which uses
+        mean squared error with Friedman's improvement score for potential
+        splits, "absolute_error" for the mean absolute error, which minimizes
+        the L1 loss using the median of each terminal node, and "poisson" which
+        uses reduction in Poisson deviance to find splits.
 
         .. versionadded:: 0.18
            Mean Absolute Error (MAE) criterion.
 
         .. versionadded:: 0.24
             Poisson deviance criterion.
-
-        .. versionchanged:: 1.9
-            Criterion `"friedman_mse"` was deprecated.
 
     splitter : {"random", "best"}, default="random"
         The strategy used to choose the split at each node. Supported
@@ -1953,7 +1922,7 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
     >>> reg = BaggingRegressor(extra_tree, random_state=0).fit(
     ...     X_train, y_train)
     >>> reg.score(X_test, y_test)
-    0.33
+    0.33...
     """
 
     def __init__(
@@ -1989,8 +1958,12 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
 
     def __sklearn_tags__(self):
         tags = super().__sklearn_tags__()
-        # XXX: nan values are only accepted in dense arrays, but we set this for
+        # XXX: nan is only supported for dense arrays, but we set this for the
         # common test to pass, specifically: check_estimators_nan_inf
-        allow_nan = self.splitter == "random"
+        allow_nan = self.splitter == "random" and self.criterion in {
+            "squared_error",
+            "friedman_mse",
+            "poisson",
+        }
         tags.input_tags.allow_nan = allow_nan
         return tags

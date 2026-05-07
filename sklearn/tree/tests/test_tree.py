@@ -649,6 +649,52 @@ def test_min_samples_split():
 
         assert np.min(node_samples) > 9, "Failed with {0}".format(name)
 
+@pytest.mark.parametrize("criterion", ["entropy", "gini", "ogini"])
+def test_missing_values_best_splitter_three_classes(criterion):
+    """Test when missing values are uniquely present in a class among 3 classes."""
+    missing_values_class = 0
+    X = np.array([[np.nan] * 4 + [0, 1, 2, 3, 8, 9, 11, 12]]).T
+    y = np.array([missing_values_class] * 4 + [1] * 4 + [2] * 4)
+    dtc = DecisionTreeClassifier(random_state=42, max_depth=2, criterion=criterion)
+    dtc.fit(X, y)
+
+    X_test = np.array([[np.nan, 3, 12]]).T
+    y_nan_pred = dtc.predict(X_test)
+    # Missing values necessarily are associated to the observed class.
+    assert_array_equal(y_nan_pred, [missing_values_class, 1, 2])
+
+
+@pytest.mark.parametrize("criterion", ["entropy", "gini", "ogini"])
+def test_missing_values_best_splitter_to_left(criterion):
+    """Missing values spanning only one class at fit-time must make missing
+    values at predict-time be classified has belonging to this class."""
+    X = np.array([[np.nan] * 4 + [0, 1, 2, 3, 4, 5]]).T
+    y = np.array([0] * 4 + [1] * 6)
+
+    dtc = DecisionTreeClassifier(random_state=42, max_depth=2, criterion=criterion)
+    dtc.fit(X, y)
+
+    X_test = np.array([[np.nan, 5, np.nan]]).T
+    y_pred = dtc.predict(X_test)
+
+    assert_array_equal(y_pred, [0, 1, 0])
+
+
+@pytest.mark.parametrize("criterion", ["entropy", "gini", "ogini"])
+def test_missing_values_best_splitter_to_right(criterion):
+    """Missing values and non-missing values sharing one class at fit-time
+    must make missing values at predict-time be classified has belonging
+    to this class."""
+    X = np.array([[np.nan] * 4 + [0, 1, 2, 3, 4, 5]]).T
+    y = np.array([1] * 4 + [0] * 4 + [1] * 2)
+
+    dtc = DecisionTreeClassifier(random_state=42, max_depth=2, criterion=criterion)
+    dtc.fit(X, y)
+
+    X_test = np.array([[np.nan, 1.2, 4.8]]).T
+    y_pred = dtc.predict(X_test)
+
+    assert_array_equal(y_pred, [1, 0, 1])
 
 def test_min_samples_leaf():
     # Test if leaves contain more than leaf_count training examples
@@ -2505,54 +2551,6 @@ def test_missing_values_random_splitter_on_equal_nodes_no_missing(criterion, see
         assert_allclose(y_pred_left, y_pred)
     else:
         assert_allclose(y_pred_right, y_pred)
-
-
-@pytest.mark.parametrize("criterion", ["entropy", "gini"])
-def test_missing_values_best_splitter_three_classes(criterion):
-    """Test when missing values are uniquely present in a class among 3 classes."""
-    missing_values_class = 0
-    X = np.array([[np.nan] * 4 + [0, 1, 2, 3, 8, 9, 11, 12]]).T
-    y = np.array([missing_values_class] * 4 + [1] * 4 + [2] * 4)
-    dtc = DecisionTreeClassifier(random_state=42, max_depth=2, criterion=criterion)
-    dtc.fit(X, y)
-
-    X_test = np.array([[np.nan, 3, 12]]).T
-    y_nan_pred = dtc.predict(X_test)
-    # Missing values necessarily are associated to the observed class.
-    assert_array_equal(y_nan_pred, [missing_values_class, 1, 2])
-
-
-@pytest.mark.parametrize("criterion", ["entropy", "gini"])
-def test_missing_values_best_splitter_to_left(criterion):
-    """Missing values spanning only one class at fit-time must make missing
-    values at predict-time be classified has belonging to this class."""
-    X = np.array([[np.nan] * 4 + [0, 1, 2, 3, 4, 5]]).T
-    y = np.array([0] * 4 + [1] * 6)
-
-    dtc = DecisionTreeClassifier(random_state=42, max_depth=2, criterion=criterion)
-    dtc.fit(X, y)
-
-    X_test = np.array([[np.nan, 5, np.nan]]).T
-    y_pred = dtc.predict(X_test)
-
-    assert_array_equal(y_pred, [0, 1, 0])
-
-
-@pytest.mark.parametrize("criterion", ["entropy", "gini"])
-def test_missing_values_best_splitter_to_right(criterion):
-    """Missing values and non-missing values sharing one class at fit-time
-    must make missing values at predict-time be classified has belonging
-    to this class."""
-    X = np.array([[np.nan] * 4 + [0, 1, 2, 3, 4, 5]]).T
-    y = np.array([1] * 4 + [0] * 4 + [1] * 2)
-
-    dtc = DecisionTreeClassifier(random_state=42, max_depth=2, criterion=criterion)
-    dtc.fit(X, y)
-
-    X_test = np.array([[np.nan, 1.2, 4.8]]).T
-    y_pred = dtc.predict(X_test)
-
-    assert_array_equal(y_pred, [1, 0, 1])
 
 
 @pytest.mark.parametrize("criterion", ["entropy", "gini"])
