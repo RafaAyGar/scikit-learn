@@ -4,17 +4,16 @@
 #               2010 Fabian Pedregosa <fabian.pedregosa@inria.fr>
 # License: 3-clause BSD
 
-import sys
+import importlib
 import os
-from os.path import join
 import platform
 import shutil
+import sys
+import traceback
+from os.path import join
 
 from setuptools import Command, Extension, setup
 from setuptools.command.build_ext import build_ext
-
-import traceback
-import importlib
 
 try:
     import builtins
@@ -51,7 +50,6 @@ import sklearn  # noqa
 import sklearn._min_dependencies as min_deps  # noqa
 from sklearn._build_utils import _check_cython_version  # noqa
 from sklearn.externals._packaging.version import parse as parse_version  # noqa
-
 
 VERSION = sklearn.__version__
 
@@ -151,8 +149,7 @@ class CleanCommand(Command):
         for dirpath, dirnames, filenames in os.walk("sklearn"):
             for filename in filenames:
                 if any(
-                    filename.endswith(suffix)
-                    for suffix in (".so", ".pyd", ".dll", ".pyc")
+                    filename.endswith(suffix) for suffix in (".so", ".pyd", ".dll", ".pyc")
                 ):
                     os.unlink(os.path.join(dirpath, filename))
                     continue
@@ -506,9 +503,8 @@ def configure_extension_modules():
     if "sdist" in sys.argv or "--help" in sys.argv:
         return []
 
-    from sklearn._build_utils import cythonize_extensions
-    from sklearn._build_utils import gen_from_templates
     import numpy
+    from sklearn._build_utils import cythonize_extensions, gen_from_templates
 
     is_pypy = platform.python_implementation() == "PyPy"
     np_include = numpy.get_include()
@@ -519,10 +515,8 @@ def configure_extension_modules():
     else:
         default_libraries = []
 
-    default_extra_compile_args = []
-    build_with_debug_symbols = (
-        os.environ.get("SKLEARN_BUILD_ENABLE_DEBUG_SYMBOLS", "0") != "0"
-    )
+    default_extra_compile_args = ["--line-trace"]
+    build_with_debug_symbols = os.environ.get("SKLEARN_BUILD_ENABLE_DEBUG_SYMBOLS", "0") != "0"
     if os.name == "posix":
         if build_with_debug_symbols:
             default_extra_compile_args.append("-g")
@@ -575,9 +569,7 @@ def configure_extension_modules():
             if extension.get("include_np", False):
                 include_dirs.append(np_include)
 
-            depends = [
-                join(parent_dir, depend) for depend in extension.get("depends", [])
-            ]
+            depends = [join(parent_dir, depend) for depend in extension.get("depends", [])]
 
             extra_compile_args = (
                 extension.get("extra_compile_args", []) + default_extra_compile_args
@@ -655,9 +647,7 @@ def setup_package():
     )
 
     commands = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
-    if not all(
-        command in ("egg_info", "dist_info", "clean", "check") for command in commands
-    ):
+    if not all(command in ("egg_info", "dist_info", "clean", "check") for command in commands):
         if sys.version_info < required_python_version:
             required_version = "%d.%d" % required_python_version
             raise RuntimeError(

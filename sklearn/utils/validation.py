@@ -15,6 +15,7 @@ import numbers
 import operator
 
 import numpy as np
+import pandas as pd
 import scipy.sparse as sp
 from inspect import signature, isclass, Parameter
 
@@ -764,7 +765,8 @@ def check_array(
         with suppress(ImportError):
             from pandas.api.types import is_sparse
 
-            if not hasattr(array, "sparse") and array.dtypes.apply(is_sparse).any():
+            # if not hasattr(array, "sparse") and array.dtypes.apply(is_sparse).any():
+            if isinstance(dtype, pd.SparseDtype):
                 warnings.warn(
                     "pandas.DataFrame with sparse columns found."
                     "It will be converted to a dense numpy array."
